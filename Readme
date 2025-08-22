@@ -1,0 +1,4 @@
+By default, all the values are considered to be in decimal including the case of .dword as well
+
+But except for once case, wherein we use the command "mem" 
+    where it accepts the base address in hexadecimal format starting with 0x.
