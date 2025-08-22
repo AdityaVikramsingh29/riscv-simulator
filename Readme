@@ -1,4 +1,18 @@
-By default, all the values are considered to be in decimal including the case of .dword as well
+# RISC-V Simulator (C++)
 
+This project is a **fully implemented RISC-V simulator** written in C++.  
+It supports the execution of RISC-V assembly programs with features for instruction parsing, memory management, and register updates.
+
+## Features
+- Supports R/I/S/B/U/J instruction formats
+- Handles branching, load/store operations, and ALU instructions
+- Memory management and register file simulation
+- Debugging utilities:
+  - Breakpoints
+  - Step-by-step execution
+  - Memory/register inspection
+
+
+By default, all the values are considered to be in decimal including the case of .dword as well
 But except for once case, wherein we use the command "mem" 
-    where it accepts the base address in hexadecimal format starting with 0x.
+where it accepts the base address in hexadecimal format starting with 0x.
