@@ -1,8 +1,33 @@
-#include <bits/stdc++.h>
+#include<bits/stdc++.h>
 using namespace std;
 #define ll long long
-
+ll tot_size,block_size,ways,ind,off,bytes;
+int ind_bits,way_bits,offset_bits;
+string replacement_policy;
+string writeback_policy;
+vector<vector<bool>>valid,dirty(1);
+vector<vector<ll>>tag_vec(1);
+vector<vector<vector<int>>>cache(1);
 vector<bitset<8>>mem(0x50002);
+int repl_policy_num;
+vector<vector<ll>>replacement_table(1);
+int lru_replace_index =-1, random_repalce_index = -1, fifo_replace_index = -1;
+// write_type denotes whether it is WT or WB
+int write_type=-1;
+int time_stamp=0;
+vector<int>time_vec;
+ofstream outputfile;
+bool cache_enable;
+
+// FIFO -> 1
+// LRU -> 2
+// RANDOM -> 3
+
+// WB -> 1
+// WT -> 2
+
+ll hits=0,miss=0;
+
 inline void ltrim(std::string &s)
 {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch)
@@ -38,7 +63,6 @@ void reset(map<string, int> &label_lineno, string &line, vector<string> &instruc
     lineno=0;
     line="";    
     pc=0;
-    reg.clear();
     reg.resize(32,0);
     brkpts.clear();
     mem.clear();
@@ -54,6 +78,25 @@ void reset(map<string, int> &label_lineno, string &line, vector<string> &instruc
     // reg[1]=0x10000;
 }
 
+void reset_cache()
+{
+    valid.clear();
+    dirty.clear();
+    cache.clear();
+    tag_vec.clear();
+    lru_replace_index =-1, random_repalce_index = -1, fifo_replace_index = -1;
+    time_stamp=0;
+    write_type=-1;
+    replacement_table.clear();
+    hits=0;
+    miss=0;
+    repl_policy_num=0;
+    ways=0;
+    ind=0;
+    off=0;
+    bytes=0;
+    cache_enable=false;
+}
 ll to_signed_int(string&s)
 {
     long long number = 0;
@@ -267,7 +310,7 @@ void R_format(map<string, string> &m_opcode,
     }
     else if(cmd.compare("sll")==0)
     {
-        cout << val1 << " " << val2 << " " << endl;
+        // cout << val1 << " " << val2 << " " << endl;
         if(val2<0||val2>63)return;
         reg[rdi]=val1 << val2;
     }
@@ -286,7 +329,6 @@ void R_format(map<string, string> &m_opcode,
     // string hexenc = to_hex(binenc);
     // myfile << hexenc<<"\n";
 }
-
 void S_format_case(string &cmd, string &rs1, string &rs2, string &imm, string &line, int lineno,ofstream& myfile)
 {
     string temp = line;
@@ -375,26 +417,267 @@ void store_type(ll addr,ll val, int no_bytes)
         mem[addr+i]=bitset<8>(temp);
     }
 }
+
+ll fifo_update(ll index_no, int associativity) {
+    int replace_index = -1;
+    int time_stamp=time_vec[index_no];
+    // Look for an empty slot 
+    for (int i = 0; i < associativity; i++) {
+        if (replacement_table[i][index_no] == 0) {
+            replacement_table[i][index_no] = time_stamp + 1;
+            replace_index = i;
+            time_vec[index_no]++;
+            break;
+        }
+    }
+
+    // If no empty slot is found, perform replacement (replace the oldest)
+    if (replace_index == -1) {
+        for (int i = 0; i < associativity; i++) {
+            if (replacement_table[i][index_no] == 1) {
+                replace_index = i;
+                replacement_table[replace_index][index_no] = associativity;
+                break;
+            }
+        }
+        for (int i = 0; i < associativity; i++) {
+            if (i != replace_index) {
+                replacement_table[i][index_no]--;
+            }
+        }
+    }
+    // for(int i=0;i<ways;i++)
+    // {
+    //     for(int j=0;j<ind;j++)
+    //     {
+    //         cout<<replacement_table[i][j]<<" ";
+    //     }
+    //     cout<<"\n";
+    // }
+    return replace_index;
+}
+
+void LRU_update(ll index_no, ll row, int associativity){
+    
+    int miss_index = -1;
+    int replace_index = -1;
+    int val = 0;
+     //miss case
+    if(row == -1){
+        val = associativity - 1;
+        for(int i = 0; i < associativity; i++){
+        if(replacement_table[i][index_no] == associativity - 1){
+            miss_index = i;
+            replacement_table[i][index_no] = 0;
+            break;
+        }
+    }
+    }else{
+        val = replacement_table[row][index_no];
+    }
+    // hit case
+    for(int i = 0; i < associativity; i++){
+        if(replacement_table[i][index_no] < val&&i!=miss_index){
+            replacement_table[i][index_no]++;
+        }
+    }
+    if(row != -1){
+        replacement_table[row][index_no] = 0;    
+    }    
+
+    //replacement
+    for(int i = 0; i < associativity; i++){
+        if(replacement_table[i][index_no] == associativity - 1){
+            replace_index = i;
+            break;
+        }
+    }
+    
+    if(miss_index != -1){
+        lru_replace_index = miss_index;
+    }else{
+        lru_replace_index = replace_index;
+    }
+    // for(int i=0;i<ways;i++)
+    // {
+    //     for(int j=0;j<ind;j++)
+    //     {
+    //         cout<<replacement_table[i][j]<<" ";
+    //     }
+    //     cout<<"\n";
+    // }
+    // cout<<ways<<" "<<lru_replace_index<<",\n";
+}
+
+void random_update(ll associativity){
+    random_repalce_index = rand()%associativity;
+}
+
+void store_to_cache(ll addr,ll val, int no_bytes)
+{
+    ll temp=addr;
+    ll mask=(1LL<<offset_bits)-1;
+    ll addr_offset=temp&mask;
+    temp>>=offset_bits;
+    mask=(1LL<<ind_bits)-1;
+    ll start_addr=temp<<offset_bits;
+    ll index=temp&mask;
+    temp>>=ind_bits;
+    ll tag=temp;
+
+    // cout<<"write back function inside.\n";
+
+    for(int i=0;i<ways;i++)
+    {
+        if(valid[index][i])
+        {
+            if(tag_vec[index][i]==tag)
+            {
+                // hit_case();
+                // cout<<"hit\n";
+                // cout<<index<<" "<<i<<",\n";
+                hits++;
+                if(write_type==1)
+                dirty[index][i]=1;
+
+                outputfile<<"W: Address: 0x"<<hex<<addr<<", Set: 0x"<<hex<<index<<" ,Hit, Tag: 0x"<<hex<<tag<<" ,"<<(dirty[index][i]==1?"Dirty":"Clean")<<"\n";
+                // update the LRU
+                if(repl_policy_num==2)
+                LRU_update(index,i,ways);
+
+                for(int j=0;j<no_bytes;j++)
+                {
+                    ll temp=(val&0xff);
+                    val=val>>8;
+                    cache[index][i][addr_offset+j]=(temp);
+                }
+
+                if(write_type==2)
+                {
+                    store_type(addr,val,no_bytes);
+                }
+                return;
+            }
+            else 
+            {
+                // flag_hit=false;
+            }
+        }
+        else 
+            {
+                // miss_case();
+            }
+    }
+    // there has been a miss
+    // cout<<"miss\n";
+    miss++;
+    // miss in write through
+    if(write_type==2)
+    {
+        cout<<hex<<addr<<' '<<tag<<"\n";
+        store_type(addr,val,no_bytes);
+         outputfile<<"W: Address: 0x"<<hex<<addr<<", Set: 0x"<<hex<<index<<" ,Miss, Tag: 0x"<<hex<<tag<<" ,"<<("Clean")<<"\n";                
+        return ;
+    }
+    int replace_ind=-1;
+                if(repl_policy_num==1)
+                {
+                    // fifo_update_func
+                    replace_ind=fifo_update(index,ways);
+                }
+                else if(repl_policy_num==2)
+                {
+                    // lru_update_func
+                    LRU_update(index,-1,ways);
+                    replace_ind=lru_replace_index;
+                }
+                else
+                {
+                    // rand_update_func
+                    random_update(ways);
+                    replace_ind=random_repalce_index;
+                }
+                // cout<<index<<" "<<replace_ind<<",\n";
+                if(dirty[index][replace_ind]==1)
+                {
+                    // write back to memory
+                    valid[index][replace_ind]=0;
+                    for(int i=0;i<no_bytes;i++)
+                    {
+                        mem[start_addr+i]=bitset<8>(cache[index][replace_ind][i]);
+                    }
+                }
+                // filled the cache
+                tag_vec[index][replace_ind]=tag;
+                for(int i=0;i<bytes;i++)
+                {
+                    cache[index][replace_ind][i]=mem[start_addr+i].to_ullong();
+                }
+                for(int j=0;j<no_bytes;j++)
+                {
+                    ll temp=(val&0xff);
+                    val=val>>8;
+                    cache[index][replace_ind][addr_offset+j]=(temp);
+                }
+                tag_vec[index][replace_ind]=tag;
+                valid[index][replace_ind]=1;
+                dirty[index][replace_ind]=1;  
+                outputfile<<"W: Address: 0x"<<hex<<addr<<", Set: 0x"<<hex<<index<<" ,Hit, Tag: 0x"<<hex<<tag<<" ,"<<(dirty[index][replace_ind]==1?"Dirty":"Clean")<<"\n";                
+}
+
 void store_handle(ll rs1,ll rs2,ll diff,string &cmd,vector<ll>&reg, ll &pc)
 {
     pc+=4;
     ll val=reg[rs2];
     ll addr=reg[rs1]+diff;
-    if(cmd.compare("sb")==0)
+
+    ll temp=addr;
+    ll mask=(1LL<<offset_bits)-1;
+    ll addr_offset=temp&mask;
+    temp>>=offset_bits;
+    mask=(1LL<<ind_bits)-1;
+    ll start_addr=temp<<offset_bits;
+    ll index=temp&mask;
+    temp>>=ind_bits;
+    ll tag=temp;
+    // if write through then no use of cache
+    if(cache_enable==false)
     {
-        store_type(addr,val,1);
+        if(cmd.compare("sb")==0)
+        {
+            store_type(addr,val,1);
+        }
+        else if(cmd.compare("sh")==0)
+        {
+            store_type(addr,val,2);
+        }
+        else if(cmd.compare("sw")==0)
+        {
+            store_type(addr,val,4);
+        }
+        else if(cmd.compare("sd")==0)
+        {
+            store_type(addr,val,8);
+        }
     }
-    else if(cmd.compare("sh")==0)
+    else
     {
-        store_type(addr,val,2);
-    }
-    else if(cmd.compare("sw")==0)
-    {
-        store_type(addr,val,4);
-    }
-    else if(cmd.compare("sd")==0)
-    {
-        store_type(addr,val,8);
+        if(cmd.compare("sb")==0)
+        {
+            store_to_cache(addr,val,1);
+        }
+        else if(cmd.compare("sh")==0)
+        {
+            store_to_cache(addr,val,2);
+        }
+        else if(cmd.compare("sw")==0)
+        {
+            store_to_cache(addr,val,4);
+        }
+        else if(cmd.compare("sd")==0)
+        {
+            store_to_cache(addr,val,8);
+        }
     }
 }
 
@@ -798,15 +1081,88 @@ ll getvalue(ll source, ll no_bytes)
     return ans;
 }
 
+ll getvaluefromcache(ll source, ll no_bytes,ll index,ll way,ll addr_offset)
+{
+    ll ans=0;
+    // for(int i=0;i<bytes;i++)
+    // {
+    //     cout<<hex<<cache[index][way][i]<<",";
+    // }
+    // cout<<"\n";
+    for(int i=0;i<no_bytes;i++)
+    {
+        ll temp=(ll)(cache[index][way][i+addr_offset]);
+        ans=ans+(temp<<8*i);
+    }
+    return ans;
+}
+void load_from_cache(ll source,vector<ll>&reg,ll &dest,string &cmd,ll index,ll way, ll addr_offset)
+{
+    if(cmd.compare("lb")==0)
+    {
+        reg[dest]=getvaluefromcache(source,1,index,way,addr_offset);
+        if((reg[dest]>>7)&1)
+        {
+            reg[dest]|=0xffffffffffffff00;
+        }
+    }
+    if(cmd.compare("lh")==0)
+    {
+        reg[dest]=getvaluefromcache(source,2,index,way,addr_offset);
+        if((reg[dest]>>15)&1)
+        {
+            reg[dest]|=0xffffffffffff0000;
+        }
+    }
+    if(cmd.compare("lw")==0)
+    {
+        reg[dest]=getvaluefromcache(source,4,index,way,addr_offset);
+        if((reg[dest]>>31)&1)
+        {
+            reg[dest]|=0xffffffff00000000;
+        }
+    }
+    if(cmd.compare("ld")==0)
+    {
+        reg[dest]=getvaluefromcache(source,8,index,way,addr_offset);
+    }
+    if(cmd.compare("lbu")==0)
+    {
+        reg[dest]=getvaluefromcache(source,1,index,way,addr_offset)&0xff;
+    }
+    if(cmd.compare("lhu")==0)
+    {
+        reg[dest]=getvaluefromcache(source,2,index,way,addr_offset)&0xffff;
+    }
+    if(cmd.compare("lwu")==0)
+    {
+        reg[dest]=getvaluefromcache(source,4,index,way,addr_offset)&0xffffffff;
+    }
+    return ;
+}
+void miss_case_load(ll index,ll tag,ll way,ll start_addr)
+{
+    valid[index][way]=1;
+    tag_vec[index][way]=tag;
+    dirty[index][way]=0;
+    for(int i=0;i<bytes;i++)
+    {
+        cache[index][way][i]=mem[start_addr+i].to_ullong();
+    }
+}
+
 void load_handle(string &cmd,string&rs1,string &rd, string &imm,vector<ll>&reg,ll&pc)
 {
     ll addr=reg[stoi(rs1.substr(1))];
     ll diff=stoi(imm);
     ll dest=stoi(rd.substr(1));
     ll source=diff+addr;
-
+    ll temp=source;
     pc+=4;
-    if(cmd.compare("lb")==0)
+
+    if(cache_enable==false)
+    {
+     if(cmd.compare("lb")==0)
     {
         reg[dest]=getvalue(source,1);
         if((reg[dest]>>7)&1)
@@ -846,8 +1202,94 @@ void load_handle(string &cmd,string&rs1,string &rd, string &imm,vector<ll>&reg,l
     {
         reg[dest]=getvalue(source,4)&0xffffffff;
     }
-    // cout<<mem[0x10000]<<endl;
     return ;
+    }
+
+    ll mask=(1LL<<offset_bits)-1;
+    ll addr_offset=temp&mask;
+    temp>>=offset_bits;
+    mask=(1LL<<ind_bits)-1;
+    ll start_addr=temp<<offset_bits;
+    ll index=temp&mask;
+    temp>>=ind_bits;
+    ll tag=temp;
+
+    // cout<<hits+miss<<"\n";
+    // cout<<dec<<offset_bits<<" "<<ind_bits<<",\n";
+    // cout<<hex<<offset<<" "<<index<<' '<<tag<<",\n";    
+
+    ll replace_ind=-1;
+    if(repl_policy_num==1)
+    {
+        // fifo_update_func
+    }
+    else if(repl_policy_num==2)
+    {
+        // lru_update_func
+    }
+    else
+    {
+        // rand_update_func
+    }
+
+    bool flag_hit=false;
+    for(int i=0;i<ways;i++)
+    {
+        if(valid[index][i])
+        {
+            if(tag_vec[index][i]==tag)
+            {
+                // hit_case();
+                // cout<<"hit\n";
+                // cout<<index<<" "<<i<<", tag"<<hex<<tag<<"\n";
+                hits++;
+                outputfile<<"R: Address: 0x"<<hex<<source<<", Set: 0x"<<hex<<index<<" ,Hit, Tag: 0x"<<hex<<tag<<" ,"<<(dirty[index][i]==1?"Dirty":"Clean")<<"\n";
+                if(repl_policy_num==2)
+                {
+                    // lru_update_func
+                    LRU_update(index,i,ways);
+                }
+                load_from_cache(source,reg,dest,cmd,index,i,addr_offset);
+                return;
+            }
+            else 
+            {
+                flag_hit=false;
+            }
+        }
+        else 
+            {
+                // miss_case();
+                flag_hit=false;
+            }
+    }
+    // there has been a miss
+    // cout<<"miss\n";
+    miss++;
+                if(repl_policy_num==1)
+                {
+                    // fifo_update_func
+                    replace_ind=fifo_update(index,ways); 
+                }
+                else if(repl_policy_num==2)
+                {
+                    // lru_update_func
+                    LRU_update(index,-1,ways);
+                    replace_ind=lru_replace_index;
+                }
+                else
+                {
+                    // rand_update_func
+                    random_update(ways);
+                    replace_ind=random_repalce_index;
+                }
+    miss_case_load(index,tag,replace_ind,start_addr); 
+    // cout<<"repl ind"<<lru_replace_index<<",\n";
+    load_from_cache(source,reg,dest,cmd,index,replace_ind,addr_offset);
+    // cout<<hex<<"tag"<<tag<<"\n";
+    // cout<<dec<<index<<" "<<replace_ind<<"\n";
+    outputfile<<"R: Address: 0x"<<hex<<source<<", Set: 0x"<<hex<<index<<" ,Miss, Tag: 0x"<<hex<<tag<<" ,"<<(dirty[index][replace_ind]==1?"Dirty":"Clean")<<"\n";
+    return;
 }
 
 void I_format(map<string, string> &m_opcode,
@@ -975,21 +1417,6 @@ void I_format(map<string, string> &m_opcode,
             myfile.close();
             exit(0);
         }
-        // else
-        // {
-        //     if (command.compare("slli") == 0)
-        //     {
-        //         imm.replace(0, 6, "000000");
-        //     }
-        //     else if (command.compare("srli") == 0)
-        //     {
-        //         imm.replace(0, 6, "000000");
-        //     }
-        //     else
-        //     {
-        //         imm.replace(0, 6, "010000");
-        //     }
-        // }
     }
     
     ll val1=reg[rs1i];
@@ -1034,9 +1461,7 @@ void I_format(map<string, string> &m_opcode,
     else{
 
     }  
-
 }
-
 
 void U_format_case(string &cmd, string &rd, string &imm, string &line, int lineno,ofstream& myfile)
 {
@@ -1304,6 +1729,16 @@ void show_memory(ll addr, ll no_bytes)
         cout<<" = 0x"<<hex<<mem[addr+i].to_ullong()<<"\n";
     }
 }
+string getFileNameWithoutExtension(const string& filename) {
+    size_t lastDot = filename.find_last_of('.');
+    size_t lastSlash = filename.find_last_of("/\\");
+
+    if (lastDot == string::npos || (lastSlash != string::npos && lastSlash > lastDot)) {
+        return filename; 
+    }
+    return filename.substr(lastSlash + 1, lastDot - lastSlash - 1);
+}
+
 int main()
 {
     map<string, string> m_opcode;
@@ -1442,105 +1877,231 @@ int main()
     
     set<ll>brkpts;
     reset(label_lineno,line,instructions,lineno,reg,pc,brkpts);
+    ll associativity=0;
+
     // cout<<mem[0x10006];
     while(1){
         string input_line = "";
         string first_command;
         cin>>first_command;
-        if(first_command.compare("load") == 0){
+        if(first_command.compare("cache_sim") == 0){
+            // cout << "cache called";
+            string cache_commands = "";
+            cin>>cache_commands;
+            bool cache_disable = false;
+            int cache_size = 0, block_size = 0, associativity = 0;
+            if(cache_commands.compare("enable") == 0){
+                // cout << "cache called";
+                string cache_filename = "";
+                cin>>cache_filename;
+                ifstream infile(cache_filename);
+                
+                cache_enable=true;
+
+                if(!infile){
+                    cerr << "Error opening file: " << cache_filename << endl;
+                }
+                infile>>tot_size>>block_size>>associativity>>replacement_policy>>writeback_policy;
+
+                // full associativity
+                if(associativity==0)
+                {ind=1;associativity=tot_size/block_size;}
+                else
+                ind=tot_size/(associativity*block_size);
+
+                bytes=block_size;
+                off=bytes;
+                ways=associativity;
+                // associativity=block_size;
+
+                if(replacement_policy.compare("FIFO")==0)
+                {
+                    repl_policy_num=1;
+                }
+                else if(replacement_policy.compare("LRU")==0)
+                {
+                    repl_policy_num=2;
+                }
+                else 
+                {
+                    repl_policy_num=3;
+                }
+
+                if(writeback_policy.compare("WB")==0)
+                {
+                    write_type=1;
+                }
+                else
+                write_type=2;
+
+                // cache=vector<vector<vector<ll>>>(ind,vector<vector<ll>>(bytes,vector<ll>(ways,0)));
+                cache.resize(ind,vector<vector<int>>(bytes,vector<int>(ways,0)));
+                // valid=vector<vector<bool>>(ind,vector<bool>(ways,0));
+                valid.resize(ind,vector<bool>(ways,0));
+                // dirty=vector<vector<bool>>(ind,vector<bool>(ways,0));
+                dirty.resize(ind,vector<bool>(ways,0));
+                // tag_vec=vector<vector<ll>>(ind,vector<ll>(ways,0));
+                tag_vec.resize(ind,vector<ll>(ways,0));
+                ind_bits=(int)log2(ind);
+                way_bits=(int)log2(ways);
+                offset_bits=(int)log2(off);
+                time_vec.resize(ind,0);
+                
+                if(repl_policy_num==2)
+                replacement_table.resize(ways,vector<ll>(ind,ways-1));
+                // replacement_table=vector<vector<ll>>(ways,vector<ll>(ind,ways-1));
+                else                
+                replacement_table.resize(ways,vector<ll>(ind,0));
+                // replacement_table=vector<vector<ll>>(ways,vector<ll>(ind,0));
+                cache_enable=true;
+            } 
+            else if(cache_commands.compare("disable") == 0){
+                cache_disable = true;
+                cache_enable=false;
+            }
+            else if(cache_commands.compare("status") == 0){
+                if(cache_enable == true){
+                    cout << "Cache Enabled" << endl;
+                    cout << "Cache Size: "<< dec<<tot_size<<endl;
+                    cout << "Block Size:" << dec<<bytes<<endl;
+                    cout << "Associativity: "<<dec<<ways<<endl;
+                    cout << "Replacement Policy: "<< replacement_policy<<endl;
+                    cout << "Write Back Policy: "<<writeback_policy <<endl;
+                }else{
+                    cout << "Cache Disabled";
+                }
+            }
+            else if(cache_commands.compare("invalidate") == 0){
+                //invalidate every entry
+                for(int i=0;i<ind;i++)
+                {
+                    for(int j=0;j<ways;j++)
+                    {
+                        valid[i][j]=0;
+                    }
+                }    
+            }
+            else if(cache_commands.compare("dump") == 0){
+                string output_filename;
+                cin >> output_filename;
+                ofstream outfile(output_filename);
+                if(cache_enable)
+                {
+                    for(int i=0;i<ind;i++)
+                    {
+                        for(int j=0;j<ways;j++)
+                        {
+                            if(valid[i][j])
+                            {
+                                outfile<<"Set: 0x"<<hex<<i<<", Tag: 0x"<<hex<<tag_vec[i][j]<<", "<<(dirty[i][j]==1?"Dirty":"Clean")<<"\n";
+                            }
+                        }
+                    }
+                }
+                outfile.close();
+            }
+            else if(cache_commands.compare("stats") == 0){
+                double hit_rate=(double)(hits)/(hits+miss);
+                cout <<dec<< "D-cache statistics: Accesses="<<hits+miss<<", Hit="<<hits<<", Miss="<<miss<<", Hit Rate="<<hit_rate<<"\n";
+            }
+        }
+        else if(first_command.compare("load") == 0){
             ll memptr=0x10000;
             lineno=0;
+            reset_cache();
             reset(label_lineno,line,instructions,lineno,reg,pc,brkpts);
             string file_name;
             cin>>file_name;
             ifstream infile(file_name);
+            outputfile=ofstream (getFileNameWithoutExtension(file_name)+".output");
             string line;
-            while(getline(infile,line)){
-            int i = 0, n = line.length();
-            string word = "";
-            while(i < n && line[i] != ' '){
-            word += line[i];
-            i++;
-            }
-            if(word.compare(".dword")==0){
-            line = line.substr(i);
-            vector<int> v;
-            stringstream ss(line);            
-            for (int i; ss >> i;) {
-                v.push_back(i);
-                if (ss.peek() == ',')
-                    ss.ignore();
-            }
-            for (size_t i = 0; i < v.size(); i++){
-                for(int j=0;j<=7;j++){
-                mem[memptr++] = v[i] & (0b11111111);
-                v[i] = v[i] >> 8;
+            while(getline(infile,line))
+            {
+                int i = 0, n = line.length();
+                string word = "";
+                while(i < n && line[i] != ' '){
+                word += line[i];
+                i++;
                 }
-            }
-            }
-            else if(word.compare(".word")==0){
-            line = line.substr(i);
-            vector<int> v;
-            stringstream ss(line);            
-            for (int i; ss >> i;) {
-                v.push_back(i);
-                if (ss.peek() == ',')
-                    ss.ignore();
-            }
-            for (size_t i = 0; i < v.size(); i++){
-                for(int j=0;j<=3;j++){
-                mem[memptr++] = v[i] & (0b11111111);
-                v[i] = v[i] >> 8;
+                if(word.compare(".dword")==0){
+                line = line.substr(i);
+                vector<ll> v;
+                stringstream ss(line);            
+                for (ll i; ss >> i;) {
+                    v.push_back(i);
+                    if (ss.peek() == ',')
+                        ss.ignore();
                 }
-            }
-            }
-            else if(word.compare(".half")==0){
-            line = line.substr(i);
-            vector<int> v;
-            stringstream ss(line);            
-            for (int i; ss >> i;) {
-                v.push_back(i);
-                if (ss.peek() == ',')
-                    ss.ignore();
-            }
-            for (size_t i = 0; i < v.size(); i++){
-                for(int j=0;j<=1;j++){
-                mem[memptr++] = v[i] & (0b11111111);
-                v[i] = v[i] >> 8;
-                }
-            }
-            }
-            else if(word.compare(".byte")==0){
-            line = line.substr(i);
-            vector<int> v;
-            stringstream ss(line);            
-            for (int i; ss >> i;) {
-                v.push_back(i);
-                if (ss.peek() == ',')
-                    ss.ignore();
-            }
-            for (size_t i = 0; i < v.size(); i++){
-                for(int j=0;j<=0;j++){
-                mem[memptr++] = v[i] & (0b11111111);
-                v[i] = v[i] >> 8;
-                }
-            }
-            }
-                else if(word.compare(".data")==0 || word.compare(".text")==0){
-                continue;
-                }
-                else if(word.compare(".data")!=0 && line.compare(".text")!=0 &&word.compare(".dword")!=0&&word.compare("")!=0){
-                lineno++;
-                if (line.find(':') != -1)
-                    {
-                        int mini = min(line.find(':'), line.find(' '));
-                        string label = line.substr(0, mini);
-                        line = line.substr(mini + 1);
-                        label_lineno[label] = lineno;
-                        trim(line);
+                for (size_t i = 0; i < v.size(); i++){
+                    for(int j=0;j<=7;j++){
+                    mem[memptr++] = v[i] & (0b11111111);
+                    v[i] = v[i] >> 8;
                     }
-                    instructions.push_back(line);
                 }
+                }
+                else if(word.compare(".word")==0){
+                line = line.substr(i);
+                vector<ll> v;
+                stringstream ss(line);            
+                for (ll i; ss >> i;) {
+                    v.push_back(i);
+                    if (ss.peek() == ',')
+                        ss.ignore();
+                }
+                for (size_t i = 0; i < v.size(); i++){
+                    for(int j=0;j<=3;j++){
+                    mem[memptr++] = v[i] & (0b11111111);
+                    v[i] = v[i] >> 8;
+                    }
+                }
+                }
+                else if(word.compare(".half")==0){
+                line = line.substr(i);
+                vector<ll> v;
+                stringstream ss(line);            
+                for (ll i; ss >> i;) {
+                    v.push_back(i);
+                    if (ss.peek() == ',')
+                        ss.ignore();
+                }
+                for (size_t i = 0; i < v.size(); i++){
+                    for(int j=0;j<=1;j++){
+                    mem[memptr++] = v[i] & (0b11111111);
+                    v[i] = v[i] >> 8;
+                    }
+                }
+                }
+                else if(word.compare(".byte")==0){
+                line = line.substr(i);
+                vector<ll> v;
+                stringstream ss(line);            
+                for (ll i; ss >> i;) {
+                    v.push_back(i);
+                    if (ss.peek() == ',')
+                        ss.ignore();
+                }
+                for (size_t i = 0; i < v.size(); i++){
+                    for(int j=0;j<=0;j++){
+                    mem[memptr++] = v[i] & (0b11111111);
+                    v[i] = v[i] >> 8;
+                    }
+                }
+                }
+                    else if(line.compare(".data")==0 || line.compare(".text")==0){
+                    continue;
+                    }
+                    else if(line.compare(".data")!=0 && line.compare(".text")!=0 &&word.compare(".dword")!=0&&word.compare("")!=0){
+                    lineno++;
+                    if (line.find(':') != -1)
+                        {
+                            int mini = min(line.find(':'), line.find(' '));
+                            string label = line.substr(0, mini);
+                            line = line.substr(mini + 1);
+                            label_lineno[label] = lineno;
+                            trim(line);
+                        }
+                        instructions.push_back(line);
+                    }
             }
             brkpts.insert(instructions.size());
         }
@@ -1550,6 +2111,11 @@ int main()
         }
         else if(first_command.compare("run") == 0){
             run(m_opcode, m_format, m_funct3,label_lineno, alias,myfile,reg,pc,instructions,brkpts);
+            double hit_rate=(double)(hits)/(hits+miss);
+                //get the values;
+                if(cache_enable)
+                cout <<dec<< "D-cache statistics: Accesses="<<hits+miss<<", Hit="<<hits<<", Miss="<<miss<<", Hit Rate="<<hit_rate<<"\n";
+                outputfile.close();
         }
         else if(first_command.compare("regs") == 0){
             regs(reg);
