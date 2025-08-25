@@ -1,18 +1,32 @@
 # RISC-V Simulator (C++)
 
-This project is a **fully implemented RISC-V simulator** written in C++.  
-It supports the execution of RISC-V assembly programs with features for instruction parsing, memory management, and register updates.
+A **fully implemented RISC-V simulator** written in C++, capable of executing assembly programs with support for multiple instruction formats, memory/register management, and a configurable cache system.  
+
+This project demonstrates computer architecture concepts such as instruction execution, cache design, and debugging support.
+
+---
 
 ## Features
-- Supports R/I/S/B/U/J instruction formats
-- Handles branching, load/store operations, and ALU instructions
-- Memory management and register file simulation
-- Debugging utilities:
-  - Breakpoints
-  - Step-by-step execution
-  - Memory/register inspection
 
+- **Instruction Set Support**
+  - Implements R/I/S/B/U/J instruction formats
+  - Supports arithmetic, logical, load/store, and branch operations
+  - Maintains 32 general-purpose registers and a byte-addressable memory
 
-By default, all the values are considered to be in decimal including the case of .dword as well
-But except for once case, wherein we use the command "mem" 
-where it accepts the base address in hexadecimal format starting with 0x.
+- **Cache System**
+  - Configurable cache with adjustable size, block size, and associativity
+  - **Replacement Policies:** LRU (Least Recently Used), FIFO (First-In First-Out), Random
+  - **Write Policies:** Write-Back (WB) and Write-Through (WT)
+  - Tracks **hits, misses, dirty/clean blocks**, and prints detailed logs
+
+- **Debugging Tools**
+  - Breakpoints and step-by-step execution
+  - Inspect registers and memory at runtime
+  - Trace logs for instruction execution and cache behavior
+
+- **Design & Utilities**
+  - Reset functionality for CPU state and cache
+  - Binary, decimal, and hex conversion helpers
+  - Error handling for invalid instructions or operands
+  - Modular structure for easy extension (e.g., new instructions)
+
